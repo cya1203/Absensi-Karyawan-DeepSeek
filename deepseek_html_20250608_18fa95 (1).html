@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://nominatim.openstreetmap.org https://script.google.com; connect-src 'self' https://nominatim.openstreetmap.org https://script.google.com; img-src 'self' data: https://www.google.com; style-src 'self' 'unsafe-inline';">
+    <title>Absensi Karyawan</title>
+    <style>
+        /* [Tetap sama dengan kode CSS sebelumnya] */
+    </style>
+</head>
+<body>
+    <div id="welcomeScreen">
+        <div id="welcomeBox">
+            <div class="watermark-overlay-welcome"></div>
+            <h2>Selamat Datang!</h2>
+            <p>Di Aplikasi Absensi Karyawan</p>
+            <div class="store-name">
+                <span class="latucya-text">Latucya</span> <span class="brilink-text">BRILink</span>
+            </div>
+            <div id="welcomeDateTime"></div>
+            <div id="welcomeCountdown"></div>
+        </div>
+    </div>
+
+    <div id="mainContent" style="display: none;">
+        <h1>Absensi Karyawan</h1>
+        <div class="store-name">
+            <span class="latucya-text">Latucya</span> <span class="brilink-text">BRILink</span>
+        </div>
+        
+        <div id="currentDateTime"></div>
+
+        <button id="absentButton" class="absent-button">KLIK UNTUK ABSEN</button>
+        <div id="result" class="info">Tekan tombol di atas untuk mencatat absensi.</div>
+
+        <div id="locationValidationMessage"></div>
+
+        <div id="locationDetails">
+            <h3>Detail Lokasi Saat Ini</h3> 
+            <div class="coordinate-line">
+                <span class="coordinate-text"><strong>Koordinat:</strong> <span id="displayLat">...</span>, <span id="displayLng">...</span></span>
+                <a href="#" id="googleMapsLink" class="map-link" target="_blank" rel="noopener noreferrer">(Lihat di Google Maps)</a>
+            </div>
+            <p><strong>Lokasi Saat Ini:</strong> <span id="displayAddress">Mencari lokasi...</span></p>
+            <p class="current-time-display"><strong>Waktu Saat Ini:</strong> <span id="displayCurrentTime">...</span></p>
+        </div>
+
+        <div class="footer-text">
+            Dikembangkan oleh Muhammad Jodi Marties Seviadi
+        </div>
+    </div>
+
+    <script>
+        // Konfigurasi
+        const CONFIG = {
+            TARGET_LAT: -6.53336932533567,
+            TARGET_LNG: 108.45551912883644,
+            VALID_RADIUS_METERS: 50,
+            GAS_URL: 'https://script.google.com/macros/s/AKfycbxXBS8_-pCSgquZn5epPtez3Kip4p5b6M_5EwGepIYJo6EOIb7fqjdZrSJ_yfKIqLd8uw/exec',
+            EMPLOYEE_ID: "Karyawan Utama",
+            WELCOME_SCREEN_DURATION: 5
+        };
+
+        // Elemen DOM
+        const DOM = {
+            absentButton: document.getElementById('absentButton'),
+            resultElement: document.getElementById('result'),
+            displayLat: document.getElementById('displayLat'),
+            displayLng: document.getElementById('displayLng'),
+            displayAddress: document.getElementById('displayAddress'),
+            displayCurrentTime: document.getElementById('displayCurrentTime'),
+            locationValidationMessage: document.getElementById('locationValidationMessage'),
+            googleMapsLink: document.getElementById('googleMapsLink'),
+            welcomeScreen: document.getElementById('welcomeScreen'),
+            welcomeDateTime: document.getElementById('welcomeDateTime'),
+            welcomeCountdown: document.getElementById('welcomeCountdown'),
+            mainContent: document.getElementById('mainContent'),
+            currentDateTime: document.getElementById('currentDateTime')
+        };
+
+        // Fungsi Utilitas
+        const Utils = {
+            // Fungsi Haversine untuk menghitung jarak antara dua koordinat (dalam meter)
+            calculateDistance(lat1, lon1, lat2, lon2) {
+                const R = 6371000; // Radius bumi dalam meter
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = 
+                    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                return R * c; // Jarak dalam meter
+            },
+
+            // Format koordinat ke derajat, menit, detik
+            toDegreesMinutesAndSeconds(coord, type) {
+                const absolute = Math.abs(coord);
+                const degrees = Math.floor(absolute);
+                const minutesNotTruncated = (absolute - degrees) * 60;
+                const minutes = Math.floor(minutesNotTruncated);
+                const seconds = ((minutesNotTruncated - minutes) * 60).toFixed(2);
+                const direction = type === 'lat' ? 
+                    (coord >= 0 ? 'N' : 'S') : 
+                    (coord >= 0 ? 'E' : 'W');
+                return `${degrees}° ${minutes}' ${seconds}" ${direction}`;
+            },
+
+            // Escape HTML untuk mencegah XSS
+            escapeHtml(unsafe) {
+                return unsafe
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            },
+
+            // Format jarak untuk ditampilkan
+            formatDistance(distance) {
+                return distance < 1000 ? 
+                    `${distance.toFixed(1)} meter` : 
+                    `${(distance / 1000).toFixed(2)} km`;
+            }
+        };
+
+        // Fungsi untuk memperbarui tampilan waktu
+        function updateDateTime() {
+            const now = new Date();
+            const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            const dateString = now.toLocaleDateString('id-ID', optionsDate);
+            const optionsTime = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, hourCycle: 'h23' }; 
+            const timeString = now.toLocaleTimeString('id-ID', optionsTime) + ' WIB';
+
+            DOM.currentDateTime.innerHTML = Utils.escapeHtml(`${dateString} | ${timeString}`);
+            DOM.welcomeDateTime.innerHTML = Utils.escapeHtml(`${dateString} | ${timeString}`);
+        }
+
+        function updateDisplayTime() {
+            const now = new Date();
+            const optionsTime = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, hourCycle: 'h23' }; 
+            const timeString = now.toLocaleTimeString('id-ID', optionsTime) + ' WIB';
+            DOM.displayCurrentTime.textContent = timeString;
+        }
+
+        // Fungsi untuk melakukan reverse geocoding
+        async function getAddressFromCoordinates(lat, lng) {
+            const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                
+                let addressParts = [];
+                const address = data.address || {};
+
+                if (address.road) addressParts.push(address.road);
+                if (address.suburb) addressParts.push(address.suburb);
+                if (address.village) addressParts.push(address.village);
+                else if (address.town) addressParts.push(address.town);
+                else if (address.city) addressParts.push(address.city);
+                
+                if (address.county) addressParts.push(address.county);
+                if (address.state) addressParts.push(address.state);
+                if (address.country) addressParts.push(address.country);
+
+                return addressParts.length > 0 ? 
+                    addressParts.join(', ') : 
+                    (data.display_name || 'Lokasi tidak diketahui');
+            } catch (error) {
+                console.error('Error fetching address:', error);
+                return 'Tidak dapat menemukan lokasi.';
+            }
+        }
+
+        // Fungsi untuk menampilkan detail lokasi dan memvalidasi jarak
+        async function updateLocationDetails(latitude, longitude, isInitialLoad = false) {
+            DOM.displayLat.textContent = Utils.toDegreesMinutesAndSeconds(latitude, 'lat');
+            DOM.displayLng.textContent = Utils.toDegreesMinutesAndSeconds(longitude, 'lng');
+            
+            DOM.googleMapsLink.href = `https://www.google.com/maps?q=${latitude},${longitude}`;
+            DOM.googleMapsLink.style.display = 'inline';
+
+            DOM.displayAddress.textContent = 'Mencari lokasi...';
+            const address = await getAddressFromCoordinates(latitude, longitude);
+            DOM.displayAddress.textContent = address;
+
+            const distance = Utils.calculateDistance(latitude, longitude, CONFIG.TARGET_LAT, CONFIG.TARGET_LNG);
+            const distanceText = Utils.formatDistance(distance);
+
+            DOM.locationValidationMessage.style.display = 'block';
+            if (distance > CONFIG.VALID_RADIUS_METERS) {
+                DOM.locationValidationMessage.className = 'warning';
+                DOM.locationValidationMessage.innerHTML = 
+                    `Peringatan!! Anda berada ${Utils.escapeHtml(distanceText)} dari lokasi absensi yang valid. Absensi mungkin tidak tercatat!`;
+                DOM.absentButton.disabled = true;
+                DOM.resultElement.className = 'error';
+                DOM.resultElement.innerHTML = `Anda terlalu jauh dari lokasi absensi yang valid.`;
+            } else {
+                DOM.locationValidationMessage.className = 'valid';
+                DOM.locationValidationMessage.innerHTML = 
+                    `Lokasi Anda valid! Anda berada ${Utils.escapeHtml(distanceText)} dari titik absensi.`;
+                DOM.absentButton.disabled = false;
+                DOM.resultElement.className = 'info';
+                DOM.resultElement.innerHTML = `Tekan tombol di atas untuk mencatat absensi.`;
+            }
+        }
+
+        // Fungsi untuk mendapatkan lokasi dan mencatat absensi
+        async function recordAttendanceWithLocation() {
+            DOM.absentButton.disabled = true; 
+            DOM.resultElement.className = 'processing-success';
+            DOM.resultElement.innerHTML = `Memproses absensi dan mendapatkan lokasi...`;
+            
+            document.getElementById('locationDetails').style.display = 'none';
+            DOM.locationValidationMessage.style.display = 'none';
+
+            if (!navigator.geolocation) {
+                showGeolocationError('Browser Anda tidak mendukung Geolocation.');
+                return;
+            }
+
+            try {
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
+                    });
+                });
+
+                const { latitude, longitude } = position.coords;
+                const distance = Utils.calculateDistance(latitude, longitude, CONFIG.TARGET_LAT, CONFIG.TARGET_LNG);
+
+                if (distance > CONFIG.VALID_RADIUS_METERS) {
+                    const distanceText = Utils.formatDistance(distance);
+                    DOM.resultElement.className = 'error';
+                    DOM.resultElement.innerHTML = 
+                        `Absensi gagal: Anda berada ${Utils.escapeHtml(distanceText)} dari lokasi absensi yang valid.`;
+                    DOM.absentButton.disabled = true;
+                    document.getElementById('locationDetails').style.display = 'block';
+                    updateLocationDetails(latitude, longitude);
+                    return;
+                }
+
+                updateLocationDetails(latitude, longitude);
+                document.getElementById('locationDetails').style.display = 'block';
+                await submitAttendance(latitude, longitude, distance);
+            } catch (error) {
+                handleGeolocationError(error);
+            }
+        }
+
+        // Fungsi untuk menangani error geolocation
+        function handleGeolocationError(error) {
+            let errorMessage = "Tidak dapat mendapatkan lokasi. ";
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMessage += "Izin lokasi ditolak. Silakan izinkan lokasi untuk absensi.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMessage += "Informasi lokasi tidak tersedia.";
+                    break;
+                case error.TIMEOUT:
+                    errorMessage += "Waktu habis untuk mendapatkan lokasi.";
+                    break;
+                default:
+                    errorMessage += "Terjadi kesalahan saat mendapatkan lokasi.";
+            }
+            
+            DOM.resultElement.className = 'warning-yellow';
+            DOM.resultElement.innerHTML = `Absensi gagal: ${Utils.escapeHtml(errorMessage)}`;
+            DOM.absentButton.disabled = false;
+            document.getElementById('locationDetails').style.display = 'block';
+        }
+
+        // Fungsi untuk mengirim data absensi ke server
+        async function submitAttendance(latitude, longitude, distance) {
+            const params = new URLSearchParams();
+            params.append('action', 'absen');
+            params.append('qrData', CONFIG.EMPLOYEE_ID);
+            params.append('latitude', latitude);
+            params.append('longitude', longitude);
+            params.append('distance', distance);
+
+            try {
+                const response = await fetch(CONFIG.GAS_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: params
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const data = await response.json();
+                console.log('Respons dari Apps Script:', data);
+
+                if (data.status === "success") {
+                    redirectToSuccessPage(latitude, longitude);
+                } else {
+                    showAttendanceError(data.message || 'Terjadi kesalahan saat memproses absensi');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAttendanceError('Terjadi kesalahan jaringan atau server. Silakan coba lagi.');
+            }
+        }
+
+        // Fungsi untuk redirect ke halaman sukses
+        function redirectToSuccessPage(latitude, longitude) {
+            const now = new Date();
+            const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            const dateString = now.toLocaleDateString('id-ID', optionsDate);
+            const optionsTime = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, hourCycle: 'h23' };
+            const timeString = now.toLocaleTimeString('id-ID', optionsTime) + ' WIB';
+            const distance = Utils.calculateDistance(latitude, longitude, CONFIG.TARGET_LAT, CONFIG.TARGET_LNG);
+
+            const queryParams = new URLSearchParams({
+                time: encodeURIComponent(`${dateString}, Pukul ${timeString}`),
+                lat: latitude,
+                lng: longitude,
+                dist: distance.toFixed(2)
+            });
+
+            window.location.href = `success.html?${queryParams.toString()}`;
+        }
+
+        // Fungsi untuk menampilkan error absensi
+        function showAttendanceError(message) {
+            DOM.resultElement.className = 'error';
+            DOM.resultElement.innerHTML = Utils.escapeHtml(message);
+            DOM.absentButton.disabled = false;
+        }
+
+        // Fungsi untuk inisialisasi konten utama
+        function initializeMainContent() {
+            updateDateTime();
+            setInterval(updateDateTime, 1000);
+            setInterval(updateDisplayTime, 1000);
+            DOM.absentButton.disabled = false;
+            DOM.resultElement.innerHTML = 'Tekan tombol di atas untuk mencatat absensi.';
+            DOM.resultElement.className = 'info';
+            DOM.googleMapsLink.style.display = 'none';
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        updateLocationDetails(position.coords.latitude, position.coords.longitude, true);
+                    },
+                    (error) => {
+                        handleInitialGeolocationError(error);
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            } else {
+                handleInitialGeolocationError({ code: 'NOT_SUPPORTED' });
+            }
+        }
+
+        // Fungsi untuk menangani error geolocation saat inisialisasi
+        function handleInitialGeolocationError(error) {
+            console.warn("Gagal mendapatkan lokasi saat memuat halaman:", error);
+            
+            let errorMessage = "Gagal mendapatkan lokasi saat memuat halaman. ";
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMessage += "Izin lokasi ditolak. Aktifkan lokasi untuk absensi.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMessage += "Informasi lokasi tidak tersedia.";
+                    break;
+                case error.TIMEOUT:
+                    errorMessage += "Waktu habis untuk mendapatkan lokasi.";
+                    break;
+                case 'NOT_SUPPORTED':
+                    errorMessage = "Browser Anda tidak mendukung Geolocation. Absensi tidak dapat dilakukan.";
+                    break;
+                default:
+                    errorMessage += "Terjadi kesalahan tidak dikenal saat mendapatkan lokasi.";
+            }
+
+            updateLocationDetails(CONFIG.TARGET_LAT, CONFIG.TARGET_LNG, true);
+            DOM.displayAddress.textContent = 'Tidak dapat mendeteksi lokasi saat ini.';
+            DOM.locationValidationMessage.className = 'warning';
+            DOM.locationValidationMessage.style.display = 'block';
+            DOM.locationValidationMessage.innerHTML = Utils.escapeHtml(`Peringatan!! ${errorMessage}`);
+            DOM.absentButton.disabled = true;
+            DOM.googleMapsLink.style.display = 'none';
+            DOM.resultElement.className = 'warning-yellow';
+            DOM.resultElement.innerHTML = Utils.escapeHtml(`Penting: ${errorMessage}`);
+        }
+
+        // Countdown untuk welcome screen
+        function startWelcomeCountdown() {
+            let countdown = CONFIG.WELCOME_SCREEN_DURATION;
+            
+            function updateCountdown() {
+                DOM.welcomeCountdown.textContent = 
+                    `Mohon tunggu, masuk ke halaman utama dalam ${countdown} detik...`;
+                
+                if (countdown <= 0) {
+                    DOM.welcomeScreen.style.display = 'none';
+                    DOM.mainContent.style.display = 'block';
+                    initializeMainContent();
+                } else {
+                    countdown--;
+                    setTimeout(updateCountdown, 1000);
+                }
+            }
+            
+            updateCountdown();
+        }
+
+        // Event listeners
+        DOM.absentButton.addEventListener('click', recordAttendanceWithLocation);
+
+        // Inisialisasi saat halaman dimuat
+        window.addEventListener('DOMContentLoaded', () => {
+            updateDateTime();
+            startWelcomeCountdown();
+        });
+    </script>
+</body>
+</html>
